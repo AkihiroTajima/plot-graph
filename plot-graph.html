@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>プロットグラフ — 小説プロット整理ツール</title>
+<style>
+  :root{
+    --bg:#f7f7f5; --panel:#ffffff; --ink:#2b2b2b; --sub:#8a8a86;
+    --accent:#3b82f6; --accent-soft:#dbeafe; --danger:#dc2626; --warn:#f59e0b;
+    --border:#e3e3df;
+    --node-fill:#ffffff; --node-stroke:#9b9b95; --edge:#6b6b66;
+    --shadow:rgba(0,0,0,.06);
+  }
+  html[data-theme="dark"]{
+    --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --sub:#8b949e;
+    --accent:#3b82f6; --accent-soft:#1d2d44; --danger:#f85149; --warn:#d29922;
+    --border:#30363d;
+    --node-fill:#1b222c; --node-stroke:#5b636d; --edge:#8b949e;
+    --shadow:rgba(0,0,0,.5);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%; overflow:hidden;}
+  body{
+    font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",sans-serif;
+    background:var(--bg); color:var(--ink);
+    display:flex; flex-direction:column;
+  }
+  #toolbar{
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    padding:8px 12px; background:var(--panel); border-bottom:1px solid var(--border);
+  }
+  #toolbar .title{font-weight:700; margin-right:10px; font-size:14px;}
+  #toolbar button{
+    font:inherit; font-size:12.5px; padding:5px 10px; border-radius:6px;
+    border:1px solid var(--border); background:var(--panel); color:var(--ink); cursor:pointer;
+  }
+  #toolbar button:hover{background:var(--accent-soft);}
+  #toolbar button:disabled{opacity:.4; cursor:default;}
+  #toolbar .sep{width:1px; height:20px; background:var(--border); margin:0 4px;}
+  #toolbar .spacer{flex:1;}
+  #status{font-size:12px; color:var(--sub);}
+  #canvas-wrap{position:relative; flex:1; overflow:hidden;}
+  svg#canvas{position:absolute; inset:0; width:100%; height:100%; display:block;
+    background:
+      radial-gradient(circle, var(--border) 1px, transparent 1px) 0 0/24px 24px,
+      var(--bg);
+    touch-action:none; user-select:none;}
+  #hint{
+    padding:5px 12px; font-size:11.5px; color:var(--sub);
+    background:var(--panel); border-top:1px solid var(--border); white-space:nowrap; overflow:hidden;
+  }
+  /* SVG部品 */
+  .node rect{fill:var(--node-fill); stroke:var(--node-stroke); stroke-width:1.4; rx:8;}
+  .node text{font-size:14px; fill:var(--ink); pointer-events:none;}
+  .node.selected rect{stroke:var(--accent); stroke-width:2.4; fill:var(--accent-soft);}
+  .node{cursor:grab;}
+  .edge-line{stroke:var(--edge); stroke-width:1.8; fill:none;}
+  .edge-line.selected{stroke:var(--accent); stroke-width:2.6;}
+  .edge-hit{stroke:transparent; stroke-width:14; fill:none; cursor:pointer;}
+  .group-hull{cursor:grab;}
+  .group-sel{fill:none; stroke:var(--accent); pointer-events:none;}
+  .group-label{font-size:12.5px; font-weight:700; pointer-events:none;}
+  #temp-edge{stroke:var(--accent); stroke-width:2; stroke-dasharray:6 4; fill:none; pointer-events:none;}
+  #rubber{fill:rgba(59,130,246,.08); stroke:var(--accent); stroke-dasharray:4 3; pointer-events:none;}
+  /* 名前編集用の浮動入力 */
+  #editor{position:absolute; display:none; z-index:10;}
+  #editor input{
+    font:14px "Hiragino Sans","Yu Gothic UI","Meiryo",sans-serif;
+    padding:5px 8px; border:2px solid var(--accent); border-radius:6px; outline:none;
+    background:var(--panel); color:var(--ink); min-width:80px; text-align:center;
+  }
+
+  /* ロック画面 / 同期設定（E2E暗号化） */
+  .lock-overlay{
+    position:fixed; inset:0; background:var(--bg);
+    display:flex; align-items:center; justify-content:center; z-index:1000; padding:20px;
+  }
+  .lock-overlay[hidden]{display:none;}
+  .lock-card{
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    box-shadow:0 8px 30px var(--shadow); width:100%; max-width:380px; padding:28px 26px;
+  }
+  .lock-card h2{margin:0 0 4px; font-size:18px;}
+  .lock-card .lock-sub{margin:0 0 18px; font-size:13px; color:var(--sub); line-height:1.6;}
+  .lock-card input[type="password"]{
+    width:100%; font:inherit; font-size:14px; padding:10px 12px;
+    border:1px solid var(--border); border-radius:8px; background:var(--bg);
+    color:var(--ink); outline:none; margin-bottom:10px;
+  }
+  .lock-card input[type="password"]:focus{border-color:var(--accent);}
+  .lock-card button.unlock-btn{
+    width:100%; background:var(--accent); color:#fff; border:1px solid var(--accent);
+    border-radius:8px; padding:10px; font:inherit; font-size:14px; cursor:pointer; margin-top:4px;
+  }
+  .lock-card button.unlock-btn:hover{background:#2563eb;}
+  .lock-error{color:var(--danger); font-size:12px; min-height:16px; margin:6px 0 0;}
+  .lock-note{font-size:11px; color:var(--warn); line-height:1.6; margin:14px 0 0;}
+  .remember-row{
+    display:flex; align-items:center; gap:6px; font-size:12px; color:var(--sub);
+    margin:4px 0 2px; cursor:pointer; user-select:none;
+  }
+  .remember-row input{margin:0; cursor:pointer;}
+  .lock-reset{
+    margin-top:16px; padding-top:12px; border-top:1px solid var(--border);
+    font-size:12px; color:var(--sub); text-align:center;
+  }
+  .link-btn{
+    background:none; border:none; padding:0; color:var(--accent); cursor:pointer;
+    font-size:12px; text-decoration:underline;
+  }
+  .link-btn:hover{color:#2563eb;}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="title">プロットグラフ</span>
+  <button id="btn-add" title="キャンバスの空き場所をダブルクリックでも作成できます">＋ 要素を追加</button>
+  <button id="btn-rename" title="F2 / ダブルクリックでも変更できます">名前を変更</button>
+  <span class="sep"></span>
+  <button id="btn-group" title="Ctrl+G">グループ化</button>
+  <button id="btn-ungroup" title="Ctrl+Shift+G">グループ解除</button>
+  <span class="sep"></span>
+  <button id="btn-delete" title="Delete">削除</button>
+  <span class="sep"></span>
+  <button id="btn-undo" title="Ctrl+Z">↶ 元に戻す</button>
+  <button id="btn-redo" title="Ctrl+Y">↷ やり直す</button>
+  <span class="sep"></span>
+  <button id="btn-fit">全体を表示</button>
+  <span class="sep"></span>
+  <button id="btn-export">書き出し</button>
+  <button id="btn-import">読み込み</button>
+  <input type="file" id="file-import" accept=".json,application/json" hidden>
+  <div class="spacer"></div>
+  <span id="status"></span>
+  <span class="sep"></span>
+  <button id="btn-sync" title="クラウド同期設定">☁</button>
+  <button id="btn-lock" title="ロックする">🔒</button>
+  <button id="btn-theme" title="ダークモード切替">🌙</button>
+</div>
+
+<div id="canvas-wrap">
+  <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6b6b66"></path>
+      </marker>
+      <marker id="arrow-sel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#3b82f6"></path>
+      </marker>
+    </defs>
+    <g id="viewport">
+      <g id="layer-groups"></g>
+      <g id="layer-edges"></g>
+      <g id="layer-nodes"></g>
+      <path id="temp-edge" d="" visibility="hidden"></path>
+    </g>
+    <rect id="rubber" visibility="hidden"></rect>
+  </svg>
+  <div id="editor"><input type="text"></div>
+</div>
+
+<div id="hint">
+  ダブルクリック: 要素を作成 ／ 要素・グループをダブルクリック or 選択して F2: 名前変更 ／ <b>Shift+ドラッグ</b>: 矢印を張る ／ 矢印をクリックして Delete: 矢印を削除 ／ Ctrl+G: グループ化 ／ ホイール: ズーム ／ Ctrl+ドラッグ・中ボタン: 画面移動
+</div>
+
+<!-- ロック画面（E2E暗号化） -->
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-card">
+    <h2 id="lockTitle">ロック解除</h2>
+    <p class="lock-sub" id="lockSub">パスフレーズを入力してください。</p>
+    <form id="lockForm">
+      <input type="password" id="passInput" placeholder="パスフレーズ" autocomplete="off">
+      <input type="password" id="passConfirm" placeholder="パスフレーズ（確認）" autocomplete="off" hidden>
+      <label class="remember-row">
+        <input type="checkbox" id="rememberPass">
+        このデバイスで記憶する（次回から自動で解除）
+      </label>
+      <button type="submit" class="unlock-btn" id="unlockBtn">解除</button>
+    </form>
+    <p class="lock-error" id="lockError"></p>
+    <p class="lock-note" id="lockNote" hidden>
+      ⚠ パスフレーズを忘れると保存データは復元できません。安全な場所に控えてください。
+    </p>
+    <div class="lock-reset" id="lockResetRow" hidden>
+      パスフレーズを忘れた場合は
+      <button type="button" id="resetBtn" class="link-btn">初期化（全データ削除）</button>
+    </div>
+    <p style="margin:10px 0 0; font-size:12px; color:var(--sub); text-align:center;">
+      別の端末のデータを使うには
+      <button type="button" id="lockSyncBtn" class="link-btn">クラウド同期を設定</button>
+    </p>
+  </div>
+</div>
+
+<!-- クラウド同期設定 -->
+<div class="lock-overlay" id="syncOverlay" hidden>
+  <div class="lock-card">
+    <h2>クラウド同期設定</h2>
+    <p class="lock-sub">
+      Pages に登録したトークンを入力すると、暗号文をサーバーに同期します。<br>
+      空のまま保存すると同期OFF（このデバイスのみ保存）になります。
+    </p>
+    <input type="password" id="syncTokenInput" placeholder="同期トークン（API_TOKEN）" autocomplete="off">
+    <button type="button" class="unlock-btn" id="syncSaveBtn">保存</button>
+    <p class="lock-error" id="syncMsg"></p>
+    <div class="lock-reset">
+      <button type="button" id="syncCloseBtn" class="link-btn">閉じる</button>
+    </div>
+    <p class="lock-note">
+      サーバーへ送られるのは暗号文のみ。トークンはこのデバイスにだけ保存されます。
+    </p>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ============================================================
+//  状態
+// ============================================================
+let state = { nodes: [], edges: [], groups: [], seq: 1 };
+let view = { x: 0, y: 0, k: 1 };               // パン・ズーム
+let sel = { nodes: new Set(), edges: new Set(), group: null };
+let history = [], future = [];
+let drag = null;                               // 進行中のドラッグ操作
+
+const GROUP_COLORS = ["#fde8e8","#e8f1fd","#e9fbe9","#fdf3df","#f3e8fd","#e3f7f9","#fce8f3"];
+const GROUP_INK    = ["#b91c1c","#1d4ed8","#15803d","#b45309","#7e22ce","#0e7490","#be185d"];
+const NODE_H = 36;
+
+const svg      = document.getElementById("canvas");
+const viewport = document.getElementById("viewport");
+const layers = {
+  groups: document.getElementById("layer-groups"),
+  edges : document.getElementById("layer-edges"),
+  nodes : document.getElementById("layer-nodes"),
+};
+const tempEdge = document.getElementById("temp-edge");
+const rubber   = document.getElementById("rubber");
+const statusEl = document.getElementById("status");
+const editorEl = document.getElementById("editor");
+const editorIn = editorEl.querySelector("input");
+
+const measureCtx = document.createElement("canvas").getContext("2d");
+const FONT = '14px "Hiragino Sans","Yu Gothic UI","Meiryo",sans-serif';
+
+// ============================================================
+//  テーマ（ダークモード）
+// ============================================================
+const themeBtn = document.getElementById("btn-theme");
+function applyTheme(theme){
+  document.documentElement.setAttribute("data-theme", theme);
+  themeBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+}
+(function initTheme(){
+  let saved = null;
+  try { saved = localStorage.getItem("plotGraphTheme"); } catch(e){}
+  if (!saved) saved = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  applyTheme(saved);
+})();
+themeBtn.addEventListener("click", () => {
+  const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  applyTheme(next);
+  try { localStorage.setItem("plotGraphTheme", next); } catch(e){}
+});
+
+// ============================================================
+//  ユーティリティ
+// ============================================================
+const uid = p => p + (state.seq++);
+const nodeById  = id => state.nodes.find(n => n.id === id);
+const groupById = id => state.groups.find(g => g.id === id);
+
+function nodeSize(n){
+  measureCtx.font = FONT;
+  const w = Math.max(64, Math.ceil(measureCtx.measureText(n.name).width) + 28);
+  return { w, h: NODE_H };
+}
+function nodeRect(n){
+  const { w, h } = nodeSize(n);
+  return { x: n.x - w/2, y: n.y - h/2, w, h };
+}
+// ノード中心から target 方向に向かう直線と矩形境界の交点
+function borderPoint(n, target){
+  const { w, h } = nodeSize(n);
+  const dx = target.x - n.x, dy = target.y - n.y;
+  if (dx === 0 && dy === 0) return { x: n.x, y: n.y };
+  const tx = dx !== 0 ? (w/2) / Math.abs(dx) : Infinity;
+  const ty = dy !== 0 ? (h/2) / Math.abs(dy) : Infinity;
+  const t = Math.min(tx, ty);
+  return { x: n.x + dx * t, y: n.y + dy * t };
+}
+function toWorld(e){
+  const r = svg.getBoundingClientRect();
+  return { x: (e.clientX - r.left - view.x) / view.k,
+           y: (e.clientY - r.top  - view.y) / view.k };
+}
+function toScreen(p){
+  const r = svg.getBoundingClientRect();
+  return { x: p.x * view.k + view.x + r.left, y: p.y * view.k + view.y + r.top };
+}
+// 凸包(Andrew's monotone chain)
+function convexHull(pts){
+  pts = pts.slice().sort((a,b)=>a.x-b.x || a.y-b.y);
+  const cross = (o,a,b)=>(a.x-o.x)*(b.y-o.y)-(a.y-o.y)*(b.x-o.x);
+  const lo = [], up = [];
+  for (const p of pts){ while (lo.length>=2 && cross(lo[lo.length-2],lo[lo.length-1],p)<=0) lo.pop(); lo.push(p); }
+  for (let i=pts.length-1;i>=0;i--){ const p=pts[i]; while (up.length>=2 && cross(up[up.length-2],up[up.length-1],p)<=0) up.pop(); up.push(p); }
+  lo.pop(); up.pop();
+  return lo.concat(up);
+}
+function el(name, attrs){
+  const e = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// ============================================================
+//  永続化 + E2E暗号化（クラウド同期つき）
+// ============================================================
+// ストレージ抽象レイヤ: トークン有→Pages Function、無→localStorage
+const VAULT_KEY  = "plotGraphVault";        // 暗号文の保存キー（localStorage）
+const LEGACY_KEY = "plot-graph-tool-v1";    // 旧・平文版のキー（あれば暗号化して移行）
+const SYNC_URL   = "/api/plot";             // line-editor の /api/state とは別エンドポイント（KVキーも別）
+const SYNC_TOKEN_KEY = "plotGraphApiToken";
+function getToken(){ try { return localStorage.getItem(SYNC_TOKEN_KEY); } catch(e){ return null; } }
+function syncEnabled(){ return !!getToken(); }
+function localGet(){ try { return localStorage.getItem(VAULT_KEY); } catch(e){ return null; } }
+function localSet(s){ try { localStorage.setItem(VAULT_KEY, s); } catch(e){} }
+
+async function storageGetRaw(){
+  const local = localGet();
+  if (syncEnabled()){
+    try {
+      const r = await fetch(SYNC_URL, { headers: { "Authorization": "Bearer " + getToken() } });
+      if (r.ok){
+        const t = await r.text();
+        if (t) return t;          // リモートにデータあり → 優先
+        return local || null;     // リモート空 → ローカルがあれば移行用に返す
+      }
+    } catch(e){ /* 通信失敗 → ローカルへフォールバック */ }
+    return local || null;
+  }
+  return local || null;
+}
+async function storageSetRaw(s){
+  localSet(s); // 常にローカルにもキャッシュ（オフライン/フォールバック用）
+  if (syncEnabled()){
+    try {
+      await fetch(SYNC_URL, {
+        method: "PUT",
+        headers: { "Authorization": "Bearer " + getToken(), "content-type": "application/json" },
+        body: s
+      });
+    } catch(e){ /* 通信失敗時はローカルキャッシュのみ。次回保存時に再送される */ }
+  }
+}
+
+// パスフレーズのキャッシュ（このデバイスでの自動解除用・任意）
+const PASS_CACHE_KEY = "plotGraphPassCache";
+function getCachedPass(){ try { return localStorage.getItem(PASS_CACHE_KEY); } catch(e){ return null; } }
+function cachePass(p){ try { localStorage.setItem(PASS_CACHE_KEY, p); } catch(e){} }
+function clearCachedPass(){ try { localStorage.removeItem(PASS_CACHE_KEY); } catch(e){} }
+
+// 暗号ヘルパ（Web Crypto: AES-GCM 256bit + PBKDF2）
+const _enc = new TextEncoder();
+const _dec = new TextDecoder();
+const PBKDF2_ITER = 150000;
+function _b64(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))); }
+function _unb64(s){ return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }
+async function deriveKey(passphrase, salt){
+  const base = await crypto.subtle.importKey("raw", _enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: salt, iterations: PBKDF2_ITER, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+}
+async function encryptObj(key, salt, obj){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, _enc.encode(JSON.stringify(obj)));
+  return JSON.stringify({ v: 1, salt: _b64(salt), iv: _b64(iv), ct: _b64(ct) });
+}
+async function decryptBlob(key, blobStr){
+  const blob = JSON.parse(blobStr);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: _unb64(blob.iv) }, key, _unb64(blob.ct));
+  return JSON.parse(_dec.decode(pt));
+}
+
+// 鍵はセッション中だけメモリに保持（保存しない）
+let cryptoKey = null;
+let vaultSalt = null;
+
+// グラフ状態 ⇔ 保存ペイロード
+function stateToPayload(){
+  return { nodes: state.nodes, edges: state.edges, groups: state.groups, seq: state.seq };
+}
+function payloadToState(d){
+  state = { nodes: d.nodes||[], edges: d.edges||[], groups: d.groups||[], seq: d.seq||1 };
+  clearSelection();
+  history = []; future = [];
+}
+
+let saveTimer = null;
+function scheduleSave(){ clearTimeout(saveTimer); saveTimer = setTimeout(save, 300); }
+async function save(){
+  if (!cryptoKey || !vaultSalt) return;
+  try {
+    const blob = await encryptObj(cryptoKey, vaultSalt, stateToPayload());
+    await storageSetRaw(blob);
+  } catch(e){ console.error("保存失敗", e); }
+}
+
+// 履歴スナップショット（メモリのみ・暗号化対象外）
+const serialize = () => JSON.stringify(stateToPayload());
+function loadSnapshot(json){
+  const d = JSON.parse(json);
+  state = { nodes: d.nodes||[], edges: d.edges||[], groups: d.groups||[], seq: d.seq||1 };
+  clearSelection();
+}
+function pushHistory(){
+  history.push(serialize());
+  if (history.length > 100) history.shift();
+  future = [];
+}
+function commit(){
+  scheduleSave();   // localStorage + (有効なら)リモートへ暗号化保存
+  render();
+}
+function undo(){
+  if (!history.length) return;
+  future.push(serialize());
+  loadSnapshot(history.pop());
+  commit();
+}
+function redo(){
+  if (!future.length) return;
+  history.push(serialize());
+  loadSnapshot(future.pop());
+  commit();
+}
+
+// ============================================================
+//  操作(モデル)
+// ============================================================
+function addNode(x, y, name){
+  pushHistory();
+  const n = { id: uid("n"), name: name || ("要素" + (state.nodes.length + 1)), x, y };
+  state.nodes.push(n);
+  clearSelection(); sel.nodes.add(n.id);
+  commit();
+  return n;
+}
+function addEdge(from, to){
+  if (from === to) return;
+  if (state.edges.some(e => e.from === from && e.to === to)) return;
+  pushHistory();
+  state.edges.push({ id: uid("e"), from, to });
+  commit();
+}
+function deleteSelection(){
+  if (sel.group){ ungroup(sel.group); return; }   // グループ選択中の削除=解除(要素は残す)
+  if (!sel.nodes.size && !sel.edges.size) return;
+  pushHistory();
+  state.edges = state.edges.filter(e =>
+    !sel.edges.has(e.id) && !sel.nodes.has(e.from) && !sel.nodes.has(e.to));
+  state.nodes = state.nodes.filter(n => !sel.nodes.has(n.id));
+  for (const g of state.groups) g.members = g.members.filter(id => !sel.nodes.has(id));
+  state.groups = state.groups.filter(g => g.members.length >= 2);
+  clearSelection();
+  commit();
+}
+function groupSelection(){
+  if (sel.nodes.size < 2) { flash("グループ化するには要素を2つ以上選択してください"); return; }
+  pushHistory();
+  const ids = [...sel.nodes];
+  // 1要素は1グループまで: 既存グループから外し、小さくなったグループは解散
+  for (const g of state.groups) g.members = g.members.filter(id => !ids.includes(id));
+  state.groups = state.groups.filter(g => g.members.length >= 2);
+  const g = { id: uid("g"), name: "グループ" + (state.groups.length + 1),
+              members: ids, color: state.groups.length % GROUP_COLORS.length };
+  state.groups.push(g);
+  clearSelection(); sel.group = g.id;
+  commit();
+}
+function ungroup(groupId){
+  const g = groupId ? groupById(groupId) : null;
+  if (!g) { flash("解除するグループを選択してください(グループの背景をクリック)"); return; }
+  pushHistory();
+  state.groups = state.groups.filter(x => x.id !== g.id);
+  clearSelection();
+  commit();
+}
+function clearSelection(){
+  sel.nodes.clear(); sel.edges.clear(); sel.group = null;
+}
+
+// ============================================================
+//  描画
+// ============================================================
+function render(){
+  viewport.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+
+  // グループ(凸包)
+  layers.groups.innerHTML = "";
+  for (const g of state.groups){
+    const pts = [];
+    for (const id of g.members){
+      const n = nodeById(id); if (!n) continue;
+      const r = nodeRect(n);
+      pts.push({x:r.x,y:r.y},{x:r.x+r.w,y:r.y},{x:r.x,y:r.y+r.h},{x:r.x+r.w,y:r.y+r.h});
+    }
+    if (pts.length < 3) continue;
+    const hull = convexHull(pts);
+    const d = "M" + hull.map(p => p.x + "," + p.y).join(" L") + " Z";
+    const color = GROUP_COLORS[g.color % GROUP_COLORS.length];
+    if (sel.group === g.id){
+      layers.groups.appendChild(el("path", { d, class:"group-sel",
+        "stroke-width": 48, "stroke-linejoin":"round" }));
+    }
+    const hullEl = el("path", { d, class:"group-hull", fill: color, stroke: color,
+      "stroke-width": 40, "stroke-linejoin":"round" });
+    hullEl.dataset.id = g.id;
+    layers.groups.appendChild(hullEl);
+    // ラベル(包の上端)
+    const minY = Math.min(...hull.map(p=>p.y));
+    const cx = hull.reduce((s,p)=>s+p.x,0) / hull.length;
+    const label = el("text", { x: cx, y: minY - 28, "text-anchor":"middle",
+      class:"group-label", fill: GROUP_INK[g.color % GROUP_INK.length] });
+    label.textContent = g.name;
+    layers.groups.appendChild(label);
+  }
+
+  // 矢印
+  layers.edges.innerHTML = "";
+  for (const e of state.edges){
+    const a = nodeById(e.from), b = nodeById(e.to);
+    if (!a || !b) continue;
+    const p1 = borderPoint(a, b), p2 = borderPoint(b, a);
+    const seld = sel.edges.has(e.id);
+    const d = `M${p1.x},${p1.y} L${p2.x},${p2.y}`;
+    const line = el("path", { d, class: "edge-line" + (seld ? " selected" : ""),
+      "marker-end": seld ? "url(#arrow-sel)" : "url(#arrow)" });
+    const hit = el("path", { d, class: "edge-hit" });
+    hit.dataset.id = e.id;
+    layers.edges.appendChild(line);
+    layers.edges.appendChild(hit);
+  }
+
+  // 要素
+  layers.nodes.innerHTML = "";
+  for (const n of state.nodes){
+    const { w, h } = nodeSize(n);
+    const g = el("g", { class: "node" + (sel.nodes.has(n.id) ? " selected" : ""),
+      transform: `translate(${n.x},${n.y})` });
+    g.dataset.id = n.id;
+    g.appendChild(el("rect", { x: -w/2, y: -h/2, width: w, height: h, rx: 8 }));
+    const t = el("text", { "text-anchor":"middle", "dominant-baseline":"central" });
+    t.textContent = n.name;
+    g.appendChild(t);
+    layers.nodes.appendChild(g);
+  }
+
+  // ボタン状態とステータス
+  document.getElementById("btn-rename").disabled  = !(sel.nodes.size === 1 || sel.group);
+  document.getElementById("btn-group").disabled   = sel.nodes.size < 2;
+  document.getElementById("btn-ungroup").disabled = !sel.group;
+  document.getElementById("btn-undo").disabled    = !history.length;
+  document.getElementById("btn-redo").disabled    = !future.length;
+  document.getElementById("btn-delete").disabled  = !sel.nodes.size && !sel.edges.size && !sel.group;
+  if (!statusEl.dataset.flash){
+    statusEl.textContent =
+      `要素 ${state.nodes.length} ／ 矢印 ${state.edges.length} ／ グループ ${state.groups.length}` +
+      (sel.nodes.size ? `(${sel.nodes.size}個選択中)` : "");
+  }
+}
+let flashTimer = null;
+function flash(msg){
+  statusEl.textContent = msg;
+  statusEl.dataset.flash = "1";
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(()=>{ delete statusEl.dataset.flash; render(); }, 2500);
+}
+
+// ============================================================
+//  名前編集(浮動入力)
+// ============================================================
+let editing = null; // {type:'node'|'group', id}
+function openEditor(target){
+  const wrap = document.getElementById("canvas-wrap").getBoundingClientRect();
+  let p, value;
+  if (target.type === "node"){
+    const n = nodeById(target.id); if (!n) return;
+    p = toScreen(n); value = n.name;
+  } else {
+    const g = groupById(target.id); if (!g) return;
+    const members = g.members.map(nodeById).filter(Boolean);
+    const cx = members.reduce((s,n)=>s+n.x,0)/members.length;
+    const minY = Math.min(...members.map(n=>n.y)) - 60;
+    p = toScreen({x:cx, y:minY}); value = g.name;
+  }
+  editing = target;
+  editorEl.style.display = "block";
+  editorIn.value = value;
+  editorEl.style.left = (p.x - wrap.left) + "px";
+  editorEl.style.top  = (p.y - wrap.top)  + "px";
+  editorEl.style.transform = "translate(-50%,-50%)";
+  editorIn.focus();
+  editorIn.select();
+}
+function closeEditor(savechg){
+  if (!editing) return;
+  const target = editing; editing = null;
+  editorEl.style.display = "none";
+  if (savechg){
+    const name = editorIn.value.trim();
+    if (name){
+      pushHistory();
+      if (target.type === "node"){ const n = nodeById(target.id); if (n) n.name = name; }
+      else { const g = groupById(target.id); if (g) g.name = name; }
+      commit();
+    }
+  }
+}
+// 選択中の要素(1つ)またはグループの名前編集を開始
+function renameSelection(){
+  if (sel.group) openEditor({ type:"group", id:sel.group });
+  else if (sel.nodes.size === 1) openEditor({ type:"node", id:[...sel.nodes][0] });
+  else flash("名前を変更するには、要素を1つ(またはグループ)選択してください");
+}
+editorIn.addEventListener("keydown", e => {
+  if (e.isComposing) return;                 // 日本語IME変換中のEnterは無視
+  if (e.key === "Enter") closeEditor(true);
+  else if (e.key === "Escape") closeEditor(false);
+  e.stopPropagation();
+});
+editorIn.addEventListener("blur", () => closeEditor(true));
+
+// ============================================================
+//  ポインタ操作
+// ============================================================
+svg.addEventListener("pointerdown", e => {
+  if (editing) { closeEditor(true); }
+  if (e.button === 2) return;                          // 右クリックは未使用
+  svg.setPointerCapture(e.pointerId);
+  const w = toWorld(e);
+  const nodeG  = e.target.closest(".node");
+  const edgeH  = e.target.closest(".edge-hit");
+  const hullEl = e.target.closest(".group-hull");
+
+  if (e.button === 1 || (e.ctrlKey && !nodeG && !edgeH && !hullEl)){  // パン
+    drag = { type:"pan", sx:e.clientX, sy:e.clientY, ox:view.x, oy:view.y };
+    return;
+  }
+
+  if (nodeG){
+    const id = nodeG.dataset.id;
+    if (e.shiftKey && !sel.nodes.has(id) && sel.nodes.size === 0){
+      // Shift+ドラッグ: 矢印を張る
+      drag = { type:"edge", from:id };
+      tempEdge.setAttribute("visibility","visible");
+      return;
+    }
+    if (e.shiftKey){
+      // Shift+クリック: 選択に追加/除外(複数選択)
+      sel.edges.clear(); sel.group = null;
+      sel.nodes.has(id) ? sel.nodes.delete(id) : sel.nodes.add(id);
+      render();
+      return;
+    }
+    if (!sel.nodes.has(id)){ clearSelection(); sel.nodes.add(id); }
+    sel.edges.clear(); sel.group = null;
+    const orig = new Map([...sel.nodes].map(i => { const n = nodeById(i); return [i,{x:n.x,y:n.y}]; }));
+    drag = { type:"move", start:w, orig, moved:false };
+    render();
+    return;
+  }
+
+  if (edgeH){
+    const id = edgeH.dataset.id;
+    if (!e.shiftKey) clearSelection();
+    sel.nodes.clear(); sel.group = null;
+    sel.edges.has(id) ? sel.edges.delete(id) : sel.edges.add(id);
+    render();
+    return;
+  }
+
+  if (hullEl){
+    const id = hullEl.dataset.id;
+    clearSelection(); sel.group = id;
+    const g = groupById(id);
+    const orig = new Map(g.members.map(i => { const n = nodeById(i); return [i,{x:n.x,y:n.y}]; }));
+    drag = { type:"move", start:w, orig, moved:false };
+    render();
+    return;
+  }
+
+  // 空き地: 範囲選択
+  if (!e.shiftKey) { clearSelection(); render(); }
+  drag = { type:"rubber", sx:e.clientX, sy:e.clientY, additive:e.shiftKey };
+});
+
+svg.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const w = toWorld(e);
+
+  if (drag.type === "pan"){
+    view.x = drag.ox + (e.clientX - drag.sx);
+    view.y = drag.oy + (e.clientY - drag.sy);
+    render();
+
+  } else if (drag.type === "move"){
+    const dx = w.x - drag.start.x, dy = w.y - drag.start.y;
+    if (!drag.moved && Math.hypot(dx,dy) * view.k > 3){ drag.moved = true; pushHistory(); }
+    if (!drag.moved) return;
+    for (const [id,p] of drag.orig){ const n = nodeById(id); if (n){ n.x = p.x+dx; n.y = p.y+dy; } }
+    render();
+
+  } else if (drag.type === "edge"){
+    const a = nodeById(drag.from);
+    const p1 = borderPoint(a, w);
+    tempEdge.setAttribute("d", `M${p1.x},${p1.y} L${w.x},${w.y}`);
+
+  } else if (drag.type === "rubber"){
+    const r = svg.getBoundingClientRect();
+    const x = Math.min(drag.sx, e.clientX) - r.left, y = Math.min(drag.sy, e.clientY) - r.top;
+    rubber.setAttribute("x", x); rubber.setAttribute("y", y);
+    rubber.setAttribute("width",  Math.abs(e.clientX - drag.sx));
+    rubber.setAttribute("height", Math.abs(e.clientY - drag.sy));
+    rubber.setAttribute("visibility","visible");
+  }
+});
+
+svg.addEventListener("pointerup", e => {
+  if (!drag) return;
+  const d = drag; drag = null;
+
+  if (d.type === "edge"){
+    tempEdge.setAttribute("visibility","hidden");
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const nodeG = under && under.closest(".node");
+    if (nodeG) addEdge(d.from, nodeG.dataset.id);
+
+  } else if (d.type === "move"){
+    if (d.moved) commit();
+
+  } else if (d.type === "rubber"){
+    rubber.setAttribute("visibility","hidden");
+    const w1 = toWorld({clientX:d.sx, clientY:d.sy});
+    const w2 = toWorld(e);
+    const x1 = Math.min(w1.x,w2.x), x2 = Math.max(w1.x,w2.x);
+    const y1 = Math.min(w1.y,w2.y), y2 = Math.max(w1.y,w2.y);
+    if ((x2-x1) > 4 || (y2-y1) > 4){
+      if (!d.additive) clearSelection();
+      for (const n of state.nodes)
+        if (n.x >= x1 && n.x <= x2 && n.y >= y1 && n.y <= y2) sel.nodes.add(n.id);
+      render();
+    }
+  }
+});
+
+svg.addEventListener("dblclick", e => {
+  const w = toWorld(e);
+  // setPointerCapture 中は e.target が svg に差し替わるため、座標から実際の要素を取る
+  const under  = document.elementFromPoint(e.clientX, e.clientY);
+  const nodeG  = under && under.closest(".node");
+  const hullEl = under && under.closest(".group-hull");
+  const edgeH  = under && under.closest(".edge-hit");
+  if (nodeG)       openEditor({ type:"node",  id:nodeG.dataset.id });
+  else if (hullEl) openEditor({ type:"group", id:hullEl.dataset.id });
+  else if (!edgeH) { const n = addNode(w.x, w.y); openEditor({ type:"node", id:n.id }); }
+});
+
+svg.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = svg.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const k2 = Math.min(3, Math.max(0.2, view.k * (e.deltaY < 0 ? 1.12 : 1/1.12)));
+  view.x = mx - (mx - view.x) * (k2 / view.k);
+  view.y = my - (my - view.y) * (k2 / view.k);
+  view.k = k2;
+  render();
+}, { passive:false });
+
+svg.addEventListener("contextmenu", e => e.preventDefault());
+
+// ============================================================
+//  キーボード
+// ============================================================
+window.addEventListener("keydown", e => {
+  if (!lockOverlay.hidden || !syncOverlay.hidden) return;  // ロック中・同期設定中は無効
+  if (editing) return;
+  if ((e.key === "Delete" || e.key === "Backspace")){ e.preventDefault(); deleteSelection(); }
+  else if (e.key === "F2"){ e.preventDefault(); renameSelection(); }
+  else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "g"){ e.preventDefault(); groupSelection(); }
+  else if (e.ctrlKey &&  e.shiftKey && e.key.toLowerCase() === "g"){ e.preventDefault(); ungroup(sel.group); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "z"){ e.preventDefault(); undo(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "y"){ e.preventDefault(); redo(); }
+  else if (e.ctrlKey && e.key.toLowerCase() === "a"){
+    e.preventDefault(); clearSelection();
+    for (const n of state.nodes) sel.nodes.add(n.id);
+    render();
+  }
+});
+
+// ============================================================
+//  ツールバー
+// ============================================================
+document.getElementById("btn-add").onclick = () => {
+  const r = svg.getBoundingClientRect();
+  const c = { x:(r.width/2 - view.x)/view.k, y:(r.height/2 - view.y)/view.k };
+  const n = addNode(c.x + (Math.random()-0.5)*60, c.y + (Math.random()-0.5)*60);
+  openEditor({ type:"node", id:n.id });
+};
+document.getElementById("btn-rename").onclick  = renameSelection;
+document.getElementById("btn-group").onclick   = groupSelection;
+document.getElementById("btn-ungroup").onclick = () => ungroup(sel.group);
+document.getElementById("btn-delete").onclick  = deleteSelection;
+document.getElementById("btn-undo").onclick    = undo;
+document.getElementById("btn-redo").onclick    = redo;
+document.getElementById("btn-fit").onclick     = fitView;
+
+function fitView(){
+  if (!state.nodes.length) { view = {x:0,y:0,k:1}; render(); return; }
+  const rects = state.nodes.map(nodeRect);
+  const x1 = Math.min(...rects.map(r=>r.x)) - 80, y1 = Math.min(...rects.map(r=>r.y)) - 80;
+  const x2 = Math.max(...rects.map(r=>r.x+r.w)) + 80, y2 = Math.max(...rects.map(r=>r.y+r.h)) + 80;
+  const r = svg.getBoundingClientRect();
+  const k = Math.min(1.5, r.width/(x2-x1), r.height/(y2-y1));
+  view = { k, x: (r.width  - (x1+x2)*k)/2, y: (r.height - (y1+y2)*k)/2 };
+  render();
+}
+
+document.getElementById("btn-export").onclick = () => {
+  const blob = new Blob([serialize()], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "plot-graph.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+document.getElementById("btn-import").onclick = () => document.getElementById("file-import").click();
+document.getElementById("file-import").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const text = await f.text();
+    const d = JSON.parse(text);            // 妥当性チェック
+    if (!Array.isArray(d.nodes)) throw new Error("not a plot-graph file");
+    pushHistory();
+    loadSnapshot(text);
+    commit();
+    fitView();
+  } catch { flash("読み込めませんでした: プロットグラフのJSONを指定してください"); }
+  e.target.value = "";
+});
+
+// ============================================================
+//  ロック / 解除（E2E）
+// ============================================================
+const lockOverlay  = document.getElementById("lockOverlay");
+const lockTitle    = document.getElementById("lockTitle");
+const lockSub      = document.getElementById("lockSub");
+const lockForm     = document.getElementById("lockForm");
+const passInput    = document.getElementById("passInput");
+const passConfirm  = document.getElementById("passConfirm");
+const lockError    = document.getElementById("lockError");
+const lockNote     = document.getElementById("lockNote");
+const unlockBtn    = document.getElementById("unlockBtn");
+const rememberPass = document.getElementById("rememberPass");
+const lockResetRow = document.getElementById("lockResetRow");
+
+let lockMode = "unlock"; // 'unlock' | 'create'
+
+function sampleData(){
+  state.nodes = [
+    { id:"n1", name:"主人公",     x:260, y:200 },
+    { id:"n2", name:"宿敵",       x:560, y:200 },
+    { id:"n3", name:"失われた剣", x:410, y:360 },
+  ];
+  state.edges  = [ { id:"e1", from:"n1", to:"n2" }, { id:"e2", from:"n3", to:"n1" } ];
+  state.groups = [ { id:"g1", name:"第一章", members:["n1","n3"], color:1 } ];
+  state.seq = 10;
+}
+
+function showLock(mode){
+  lockMode = mode;
+  lockError.textContent = "";
+  passInput.value = "";
+  passConfirm.value = "";
+  rememberPass.checked = !!getCachedPass();
+  lockResetRow.hidden = (mode !== "unlock");
+  if (mode === "create"){
+    lockTitle.textContent = "パスフレーズを設定";
+    lockSub.textContent = "プロットはこのパスフレーズで暗号化されます。初回のみ設定します。";
+    passConfirm.hidden = false;
+    lockNote.hidden = false;
+    unlockBtn.textContent = "設定して開始";
+  } else {
+    lockTitle.textContent = "ロック解除";
+    lockSub.textContent = "パスフレーズを入力してください。";
+    passConfirm.hidden = true;
+    lockNote.hidden = true;
+    unlockBtn.textContent = "解除";
+  }
+  lockOverlay.hidden = false;
+  setTimeout(() => passInput.focus(), 50);
+}
+function hideLock(){ lockOverlay.hidden = true; }
+
+function bootGraph(){
+  render();
+  fitView();
+}
+
+lockForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  lockError.textContent = "";
+  const pass = passInput.value;
+  if (!pass){ lockError.textContent = "パスフレーズを入力してください。"; return; }
+  unlockBtn.disabled = true;
+  try {
+    if (lockMode === "create"){
+      if (pass.length < 6){ lockError.textContent = "6文字以上にしてください。"; return; }
+      if (pass !== passConfirm.value){ lockError.textContent = "確認用と一致しません。"; return; }
+      vaultSalt = crypto.getRandomValues(new Uint8Array(16));
+      cryptoKey = await deriveKey(pass, vaultSalt);
+      // 既存の平文データ(旧版)があれば暗号化して移行、なければサンプル
+      let migrated = false;
+      try {
+        const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY));
+        if (legacy && Array.isArray(legacy.nodes)){ payloadToState(legacy); migrated = true; }
+      } catch(e2){}
+      if (!migrated) sampleData();
+      await save();
+      try { localStorage.removeItem(LEGACY_KEY); } catch(e3){}
+      if (rememberPass.checked) cachePass(pass); else clearCachedPass();
+      hideLock();
+      bootGraph();
+    } else {
+      const raw = await storageGetRaw();
+      const blob = JSON.parse(raw);
+      vaultSalt = _unb64(blob.salt);
+      cryptoKey = await deriveKey(pass, vaultSalt);
+      const data = await decryptBlob(cryptoKey, raw); // 失敗＝パスフレーズ不一致
+      payloadToState(data);
+      if (rememberPass.checked) cachePass(pass); else clearCachedPass();
+      hideLock();
+      bootGraph();
+    }
+  } catch(err){
+    cryptoKey = null;
+    lockError.textContent = lockMode === "create" ? "初期化に失敗しました。" : "パスフレーズが違います。";
+  } finally {
+    unlockBtn.disabled = false;
+  }
+});
+
+function lockNow(){
+  clearCachedPass(); // 手動ロック時はキャッシュも破棄（自動再解除しない）
+  cryptoKey = null;
+  vaultSalt = null;
+  state = { nodes: [], edges: [], groups: [], seq: 1 };
+  history = []; future = [];
+  clearSelection();
+  render();
+  showLock("unlock");
+}
+document.getElementById("btn-lock").addEventListener("click", async () => {
+  if (await storageGetRaw()) lockNow();
+});
+
+// パスフレーズ忘れ時の初期化（全データ削除）
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (!confirm("保存された全データを削除し、初期状態に戻します。\nこの操作は取り消せず、暗号化データは復元できません。よろしいですか？")) return;
+  if (!confirm("本当に削除しますか？（最終確認）")) return;
+  try { localStorage.removeItem(VAULT_KEY); } catch(e){}
+  clearCachedPass();
+  cryptoKey = null;
+  vaultSalt = null;
+  state = { nodes: [], edges: [], groups: [], seq: 1 };
+  showLock("create");
+});
+
+// キャッシュされたパスフレーズで自動解除を試みる
+async function tryAutoUnlock(){
+  const raw = await storageGetRaw();
+  const cached = getCachedPass();
+  if (!raw || !cached) return false;
+  try {
+    const blob = JSON.parse(raw);
+    vaultSalt = _unb64(blob.salt);
+    cryptoKey = await deriveKey(cached, vaultSalt);
+    const data = await decryptBlob(cryptoKey, raw);
+    payloadToState(data);
+    hideLock();
+    bootGraph();
+    return true;
+  } catch(e){
+    cryptoKey = null;
+    vaultSalt = null;
+    clearCachedPass(); // 壊れている/不一致ならキャッシュ破棄
+    return false;
+  }
+}
+
+// ============================================================
+//  クラウド同期設定モーダル
+// ============================================================
+const syncOverlay = document.getElementById("syncOverlay");
+const syncTokenInput = document.getElementById("syncTokenInput");
+const syncMsg = document.getElementById("syncMsg");
+function openSync(){
+  syncTokenInput.value = getToken() || "";
+  syncMsg.textContent = "";
+  syncMsg.style.color = "";
+  syncOverlay.hidden = false;
+  setTimeout(() => syncTokenInput.focus(), 50);
+}
+document.getElementById("btn-sync").addEventListener("click", openSync);
+document.getElementById("lockSyncBtn").addEventListener("click", openSync);
+document.getElementById("syncCloseBtn").addEventListener("click", () => { syncOverlay.hidden = true; });
+document.getElementById("syncSaveBtn").addEventListener("click", async () => {
+  const t = syncTokenInput.value.trim();
+  try {
+    if (t) localStorage.setItem(SYNC_TOKEN_KEY, t);
+    else localStorage.removeItem(SYNC_TOKEN_KEY);
+  } catch(e){}
+  if (t && cryptoKey){
+    // 解除済みなら現在のデータをサーバーへ反映
+    syncMsg.style.color = "var(--sub)";
+    syncMsg.textContent = "同期中…";
+    await save();
+    syncMsg.style.color = "var(--accent)";
+    syncMsg.textContent = "同期ONにしました。";
+  } else if (t){
+    // ロック中（別端末の初回設定など）→ リモートを取得し直す
+    syncMsg.style.color = "var(--sub)";
+    syncMsg.textContent = "取得中…";
+    syncOverlay.hidden = true;
+    await init();
+  } else {
+    syncMsg.style.color = "var(--sub)";
+    syncMsg.textContent = "同期OFF（このデバイスのみ）にしました。";
+  }
+});
+
+// ============================================================
+//  起動
+// ============================================================
+async function init(){
+  if (await storageGetRaw()){
+    if (await tryAutoUnlock()) return;
+    showLock("unlock");
+  } else {
+    showLock("create");
+  }
+}
+init();
+</script>
+</body>
+</html>
