@@ -11,6 +11,17 @@
 export async function onRequest(context) {
   const { request, env } = context;
 
+  // --- 一時診断: /api/plot?diag=1 で、この関数に見えている env の「名前だけ」を返す ---
+  // （シークレットの値は出さない。原因切り分け後に削除すること）
+  if (new URL(request.url).searchParams.get('diag') === '1') {
+    return new Response(JSON.stringify({
+      envKeys: Object.keys(env),
+      hasPlotApiToken: 'PLOT_API_TOKEN' in env && !!env.PLOT_API_TOKEN,
+      hasPlotVault: 'PLOT_VAULT' in env && typeof env.PLOT_VAULT === 'object',
+      deployedAt: new Date().toISOString()
+    }, null, 2), { headers: { 'content-type': 'application/json; charset=utf-8' } });
+  }
+
   // 共有トークン認証（プロットグラフ専用のシークレット）
   const expected = env.PLOT_API_TOKEN;
   if (!expected) {
