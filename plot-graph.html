@@ -110,6 +110,42 @@
     font-size:12px; text-decoration:underline;
   }
   .link-btn:hover{color:#2563eb;}
+
+  /* 同期ステータスのバッジ（ツールバー） */
+  #sync-status{
+    font-size:11.5px; padding:3px 8px; border-radius:999px; white-space:nowrap;
+    border:1px solid var(--border); color:var(--sub); background:var(--bg);
+  }
+  #sync-status.ok{ color:#15803d; border-color:#15803d55; background:#15803d12; }
+  #sync-status.warn{ color:var(--warn); border-color:#f59e0b55; background:#f59e0b12; }
+  #sync-status.busy{ color:var(--accent); border-color:#3b82f655; background:#3b82f612; }
+
+  /* 同期設定モーダルの追加部品 */
+  .sync-modes{ display:flex; flex-direction:column; gap:8px; margin:4px 0 12px; }
+  .mode-row{
+    display:flex; align-items:flex-start; gap:8px; font-size:12.5px; line-height:1.5;
+    color:var(--ink); cursor:pointer; padding:8px 10px; border:1px solid var(--border);
+    border-radius:8px; background:var(--bg);
+  }
+  .mode-row:has(input:checked){ border-color:var(--accent); background:var(--accent-soft); }
+  .mode-row input{ margin-top:2px; cursor:pointer; }
+  .mode-row .mode-sub{ display:block; color:var(--sub); font-size:11.5px; }
+  .sync-actions{ margin-top:14px; padding-top:12px; border-top:1px solid var(--border); }
+  .sync-state-line{ font-size:12px; color:var(--sub); margin-bottom:8px; }
+  .sync-btn-row{ display:flex; gap:14px; flex-wrap:wrap; }
+  .snapshot-list{
+    margin-top:10px; max-height:200px; overflow:auto;
+    border:1px solid var(--border); border-radius:8px;
+  }
+  .snapshot-list:empty{ display:none; }
+  .snap-row{
+    display:flex; align-items:center; gap:8px; padding:7px 10px;
+    border-bottom:1px solid var(--border); font-size:12px;
+  }
+  .snap-row:last-child{ border-bottom:none; }
+  .snap-row .snap-when{ flex:1; color:var(--ink); }
+  .snap-row .snap-size{ color:var(--sub); font-size:11px; }
+  .snap-empty{ padding:10px; font-size:12px; color:var(--sub); text-align:center; }
 </style>
 </head>
 <body>
@@ -135,6 +171,7 @@
   <div class="spacer"></div>
   <span id="status"></span>
   <span class="sep"></span>
+  <span id="sync-status" title="同期状態">💾 ローカル専用</span>
   <button id="btn-sync" title="クラウド同期設定">☁</button>
   <button id="btn-lock" title="ロックする">🔒</button>
   <button id="btn-theme" title="ダークモード切替">🌙</button>
@@ -199,12 +236,39 @@
   <div class="lock-card">
     <h2>クラウド同期設定</h2>
     <p class="lock-sub">
-      Pages に登録したトークンを入力すると、暗号文をサーバーに同期します。<br>
-      空のまま保存すると同期OFF（このデバイスのみ保存）になります。
+      APIトークンを入力します。サーバーのトークンと<b>一致したときだけ</b>
+      クラウドへのアップロード／ダウンロードが有効になります。<br>
+      一致しない・空の場合は<b>ローカル専用モード</b>で動作します。
     </p>
-    <input type="password" id="syncTokenInput" placeholder="同期トークン（API_TOKEN）" autocomplete="off">
-    <button type="button" class="unlock-btn" id="syncSaveBtn">保存</button>
+    <input type="password" id="syncTokenInput" placeholder="APIトークン（PLOT_API_TOKEN）" autocomplete="off">
+
+    <div class="sync-modes">
+      <label class="mode-row">
+        <input type="radio" name="syncMode" value="auto">
+        <span><b>オート</b>
+          <span class="mode-sub">自動保存のたびに、クラウドのオートセーブを上書き保存します。</span>
+        </span>
+      </label>
+      <label class="mode-row">
+        <input type="radio" name="syncMode" value="manual">
+        <span><b>マニュアル</b>
+          <span class="mode-sub">保存操作のたびに、その時点のデータをスナップショットとして追加します。</span>
+        </span>
+      </label>
+    </div>
+
+    <button type="button" class="unlock-btn" id="syncSaveBtn">設定を保存</button>
     <p class="lock-error" id="syncMsg"></p>
+
+    <div class="sync-actions" id="syncActions" hidden>
+      <div class="sync-state-line" id="syncStateLine"></div>
+      <div class="sync-btn-row">
+        <button type="button" id="syncUploadBtn" class="link-btn">⤒ クラウドへ保存</button>
+        <button type="button" id="syncLoadBtn" class="link-btn">⤓ クラウドから読み込み</button>
+      </div>
+      <div id="snapshotList" class="snapshot-list"></div>
+    </div>
+
     <div class="lock-reset">
       <button type="button" id="syncCloseBtn" class="link-btn">閉じる</button>
     </div>
@@ -320,41 +384,92 @@ function el(name, attrs){
 // ============================================================
 //  永続化 + E2E暗号化（クラウド同期つき）
 // ============================================================
-// ストレージ抽象レイヤ: トークン有→Pages Function、無→localStorage
+// ストレージ抽象レイヤ: トークンが一致→Pages Function、それ以外→localStorageのみ
 const VAULT_KEY  = "plotGraphVault";        // 暗号文の保存キー（localStorage）
 const LEGACY_KEY = "plot-graph-tool-v1";    // 旧・平文版のキー（あれば暗号化して移行）
 const SYNC_URL   = "/api/plot";             // line-editor の /api/state とは別エンドポイント（KVキーも別）
 const SYNC_TOKEN_KEY = "plotGraphApiToken";
+const SYNC_MODE_KEY  = "plotGraphSyncMode"; // "auto" | "manual"
+
 function getToken(){ try { return localStorage.getItem(SYNC_TOKEN_KEY); } catch(e){ return null; } }
-function syncEnabled(){ return !!getToken(); }
+function getSyncMode(){ try { return localStorage.getItem(SYNC_MODE_KEY) === "manual" ? "manual" : "auto"; } catch(e){ return "auto"; } }
+function setSyncMode(m){ try { localStorage.setItem(SYNC_MODE_KEY, m === "manual" ? "manual" : "auto"); } catch(e){} }
 function localGet(){ try { return localStorage.getItem(VAULT_KEY); } catch(e){ return null; } }
 function localSet(s){ try { localStorage.setItem(VAULT_KEY, s); } catch(e){} }
+function authHeaders(extra){ return Object.assign({ "Authorization": "Bearer " + getToken() }, extra || {}); }
 
+// 同期トークンの状態（ステータス表示と同期可否の判定に使う）
+//   "local"    : トークン未設定（ローカル専用）
+//   "checking" : サーバーへ照合中
+//   "synced"   : サーバーと一致（同期有効）
+//   "invalid"  : サーバーと不一致（ローカル専用）
+//   "offline"  : 通信失敗（一時的にローカルへフォールバック）
+let tokenState = "local";
+function syncActive(){ return tokenState === "synced"; }
+
+// トークンをサーバーと照合し、tokenState を更新する。
+async function verifyToken(){
+  const t = getToken();
+  if (!t){ tokenState = "local"; updateSyncStatus(); return false; }
+  tokenState = "checking"; updateSyncStatus();
+  try {
+    const r = await fetch(SYNC_URL + "?verify=1", { headers: authHeaders() });
+    if (r.ok)              tokenState = "synced";
+    else if (r.status === 401) tokenState = "invalid";
+    else                  tokenState = "offline";
+  } catch(e){ tokenState = "offline"; }
+  updateSyncStatus();
+  return tokenState === "synced";
+}
+
+// マニュアルの最新スナップショットを1件取得（新規端末でのロック解除用フォールバック）
+async function fetchLatestSnapshot(){
+  const list = await fetchSnapshotList();
+  if (!list.length) return null;
+  const r = await fetch(SYNC_URL + "?mode=manual&key=" + encodeURIComponent(list[0].key), { headers: authHeaders() });
+  if (!r.ok) return null;
+  return await r.text();
+}
+async function fetchSnapshotList(){
+  const r = await fetch(SYNC_URL + "?mode=manual&list=1", { headers: authHeaders() });
+  if (!r.ok) return [];
+  const d = await r.json();
+  return Array.isArray(d.snapshots) ? d.snapshots : [];
+}
+
+// 読み込み用: モードに応じて「現在の保存データ」を取得する。
+//   オート  : リモートのオートスロットを優先（無ければローカル）
+//   マニュアル: ローカルを優先。ローカルが無いときだけ最新スナップショットへフォールバック
 async function storageGetRaw(){
   const local = localGet();
-  if (syncEnabled()){
-    try {
-      const r = await fetch(SYNC_URL, { headers: { "Authorization": "Bearer " + getToken() } });
-      if (r.ok){
-        const t = await r.text();
-        if (t) return t;          // リモートにデータあり → 優先
-        return local || null;     // リモート空 → ローカルがあれば移行用に返す
-      }
-    } catch(e){ /* 通信失敗 → ローカルへフォールバック */ }
-    return local || null;
+  if (syncActive()){
+    if (getSyncMode() === "auto"){
+      try {
+        const r = await fetch(SYNC_URL + "?mode=auto", { headers: authHeaders() });
+        if (r.ok){ const t = await r.text(); if (t) return t; }
+      } catch(e){ /* フォールバック */ }
+      return local || null;
+    } else {
+      if (local) return local;
+      try { const latest = await fetchLatestSnapshot(); if (latest) return latest; } catch(e){}
+      return null;
+    }
   }
   return local || null;
 }
+
+// 自動保存: 常にローカルへ保存。オートモードで同期有効ならクラウドのオートスロットも上書き。
+// （マニュアルモードのクラウド保存は「⤒ クラウドへ保存」ボタンの明示操作で行う）
 async function storageSetRaw(s){
   localSet(s); // 常にローカルにもキャッシュ（オフライン/フォールバック用）
-  if (syncEnabled()){
+  if (syncActive() && getSyncMode() === "auto"){
     try {
-      await fetch(SYNC_URL, {
-        method: "PUT",
-        headers: { "Authorization": "Bearer " + getToken(), "content-type": "application/json" },
-        body: s
+      const r = await fetch(SYNC_URL + "?mode=auto", {
+        method: "PUT", headers: authHeaders({ "content-type": "application/json" }), body: s
       });
-    } catch(e){ /* 通信失敗時はローカルキャッシュのみ。次回保存時に再送される */ }
+      if (r.ok) setSyncFlash("オート保存しました", "ok");
+      else      setSyncFlash("クラウド保存に失敗", "warn");
+    } catch(e){ setSyncFlash("オフライン（ローカル保存）", "warn"); }
   }
 }
 
@@ -391,6 +506,8 @@ async function decryptBlob(key, blobStr){
 // 鍵はセッション中だけメモリに保持（保存しない）
 let cryptoKey = null;
 let vaultSalt = null;
+// パスフレーズもセッション中だけメモリに保持（別端末/別saltのスナップショット復号に使う）
+let sessionPass = null;
 
 // グラフ状態 ⇔ 保存ペイロード
 function stateToPayload(){
@@ -925,6 +1042,7 @@ lockForm.addEventListener("submit", async (e) => {
       if (pass !== passConfirm.value){ lockError.textContent = "確認用と一致しません。"; return; }
       vaultSalt = crypto.getRandomValues(new Uint8Array(16));
       cryptoKey = await deriveKey(pass, vaultSalt);
+      sessionPass = pass;
       // 既存の平文データ(旧版)があれば暗号化して移行、なければサンプル
       let migrated = false;
       try {
@@ -943,6 +1061,7 @@ lockForm.addEventListener("submit", async (e) => {
       vaultSalt = _unb64(blob.salt);
       cryptoKey = await deriveKey(pass, vaultSalt);
       const data = await decryptBlob(cryptoKey, raw); // 失敗＝パスフレーズ不一致
+      sessionPass = pass;
       payloadToState(data);
       if (rememberPass.checked) cachePass(pass); else clearCachedPass();
       hideLock();
@@ -960,6 +1079,7 @@ function lockNow(){
   clearCachedPass(); // 手動ロック時はキャッシュも破棄（自動再解除しない）
   cryptoKey = null;
   vaultSalt = null;
+  sessionPass = null;
   state = { nodes: [], edges: [], groups: [], seq: 1 };
   history = []; future = [];
   clearSelection();
@@ -992,6 +1112,7 @@ async function tryAutoUnlock(){
     vaultSalt = _unb64(blob.salt);
     cryptoKey = await deriveKey(cached, vaultSalt);
     const data = await decryptBlob(cryptoKey, raw);
+    sessionPass = cached;
     payloadToState(data);
     hideLock();
     bootGraph();
@@ -1005,50 +1126,273 @@ async function tryAutoUnlock(){
 }
 
 // ============================================================
+//  同期ステータス表示
+// ============================================================
+const syncStatusEl = document.getElementById("sync-status");
+let syncFlashTimer = null;
+
+// 現在の tokenState とモードからステータスバッジを更新する。
+function updateSyncStatus(){
+  if (!syncStatusEl) return;
+  const mode = getSyncMode();
+  const modeLabel = mode === "manual" ? "マニュアル" : "オート";
+  let text, cls;
+  switch (tokenState){
+    case "synced":   text = "☁ クラウド同期（" + modeLabel + "）"; cls = "ok"; break;
+    case "checking": text = "☁ 確認中…"; cls = "busy"; break;
+    case "invalid":  text = "💾 ローカル専用（トークン不一致）"; cls = "warn"; break;
+    case "offline":  text = "⚠ オフライン（ローカル保存）"; cls = "warn"; break;
+    default:         text = "💾 ローカル専用"; cls = "";
+  }
+  syncStatusEl.textContent = text;
+  syncStatusEl.className = cls;
+}
+
+// 一時的なメッセージを表示し、しばらくして通常ステータスへ戻す。
+function setSyncFlash(text, cls){
+  if (!syncStatusEl) return;
+  syncStatusEl.textContent = (cls === "warn" ? "⚠ " : "✓ ") + text;
+  syncStatusEl.className = cls || "ok";
+  clearTimeout(syncFlashTimer);
+  syncFlashTimer = setTimeout(updateSyncStatus, 2800);
+}
+
+// ============================================================
 //  クラウド同期設定モーダル
 // ============================================================
-const syncOverlay = document.getElementById("syncOverlay");
+const syncOverlay    = document.getElementById("syncOverlay");
 const syncTokenInput = document.getElementById("syncTokenInput");
-const syncMsg = document.getElementById("syncMsg");
+const syncMsg        = document.getElementById("syncMsg");
+const syncActionsEl  = document.getElementById("syncActions");
+const syncStateLine  = document.getElementById("syncStateLine");
+const syncUploadBtn  = document.getElementById("syncUploadBtn");
+const syncLoadBtn    = document.getElementById("syncLoadBtn");
+const snapshotListEl = document.getElementById("snapshotList");
+
+function setSyncMsg(text, kind){
+  syncMsg.textContent = text;
+  syncMsg.style.color = kind === "ok" ? "var(--accent)" : kind === "err" ? "var(--danger)" : "var(--sub)";
+}
+
+// モーダル内の状態表示（アクション欄・ボタン文言・状態行）を現状に合わせて整える。
+function refreshSyncModal(){
+  const mode = getSyncMode();
+  document.querySelector(`input[name="syncMode"][value="${mode}"]`).checked = true;
+
+  // ボタン文言はモードで変える
+  syncUploadBtn.textContent = mode === "manual" ? "⤒ スナップショットを保存" : "⤒ 今すぐクラウドへ保存";
+  syncLoadBtn.textContent   = mode === "manual" ? "⤓ スナップショット一覧" : "⤓ クラウドから読み込み";
+
+  // アクション欄は「トークン一致 かつ ロック解除済み」のときだけ表示
+  const usable = syncActive() && !!cryptoKey;
+  syncActionsEl.hidden = !usable;
+  snapshotListEl.innerHTML = "";
+
+  let line;
+  switch (tokenState){
+    case "synced":   line = "状態: クラウド同期 有効（" + (mode === "manual" ? "マニュアル" : "オート") + "）"; break;
+    case "checking": line = "状態: トークンを確認中…"; break;
+    case "invalid":  line = "状態: トークン不一致 → ローカル専用モード"; break;
+    case "offline":  line = "状態: サーバーに接続できません → ローカル保存"; break;
+    default:         line = "状態: トークン未設定 → ローカル専用モード";
+  }
+  if (syncActive() && !cryptoKey) line += "（ロック解除後に保存／読み込みできます）";
+  syncStateLine.textContent = line;
+}
+
 function openSync(){
   syncTokenInput.value = getToken() || "";
-  syncMsg.textContent = "";
-  syncMsg.style.color = "";
+  setSyncMsg("");
+  refreshSyncModal();
   syncOverlay.hidden = false;
   setTimeout(() => syncTokenInput.focus(), 50);
+  // 開いたタイミングで最新のトークン状態を取り直す
+  verifyToken().then(refreshSyncModal);
 }
 document.getElementById("btn-sync").addEventListener("click", openSync);
 document.getElementById("lockSyncBtn").addEventListener("click", openSync);
 document.getElementById("syncCloseBtn").addEventListener("click", () => { syncOverlay.hidden = true; });
+
+// モード切替（ラジオ）→ 即保存して反映
+document.querySelectorAll('input[name="syncMode"]').forEach(r => {
+  r.addEventListener("change", () => {
+    setSyncMode(r.value);
+    updateSyncStatus();
+    refreshSyncModal();
+  });
+});
+
+// 設定保存（トークン＋モードの確定）
 document.getElementById("syncSaveBtn").addEventListener("click", async () => {
   const t = syncTokenInput.value.trim();
   try {
     if (t) localStorage.setItem(SYNC_TOKEN_KEY, t);
     else localStorage.removeItem(SYNC_TOKEN_KEY);
   } catch(e){}
-  if (t && cryptoKey){
-    // 解除済みなら現在のデータをサーバーへ反映
-    syncMsg.style.color = "var(--sub)";
-    syncMsg.textContent = "同期中…";
-    await save();
-    syncMsg.style.color = "var(--accent)";
-    syncMsg.textContent = "同期ONにしました。";
-  } else if (t){
-    // ロック中（別端末の初回設定など）→ リモートを取得し直す
-    syncMsg.style.color = "var(--sub)";
-    syncMsg.textContent = "取得中…";
-    syncOverlay.hidden = true;
-    await init();
+  const checked = document.querySelector('input[name="syncMode"]:checked');
+  if (checked) setSyncMode(checked.value);
+
+  setSyncMsg("トークンを確認中…", "info");
+  await verifyToken();
+  refreshSyncModal();
+
+  if (tokenState === "synced"){
+    if (cryptoKey && getSyncMode() === "auto"){
+      // 解除済み＆オート → 現在のデータをオートスロットへ反映
+      await save();
+      setSyncMsg("クラウド同期を有効にしました（オート）。", "ok");
+    } else if (cryptoKey){
+      setSyncMsg("クラウド同期を有効にしました（マニュアル）。保存操作でアップロードします。", "ok");
+    } else {
+      // ロック中（別端末の初回設定など）→ リモートを取得し直して解除画面へ
+      syncOverlay.hidden = true;
+      await init();
+    }
+  } else if (tokenState === "invalid"){
+    setSyncMsg("トークンがサーバーと一致しません。ローカル専用モードで動作します。", "err");
+  } else if (tokenState === "offline"){
+    setSyncMsg("サーバーに接続できませんでした。ローカル保存のみ行います。", "err");
   } else {
-    syncMsg.style.color = "var(--sub)";
-    syncMsg.textContent = "同期OFF（このデバイスのみ）にしました。";
+    setSyncMsg("トークン未設定のため、ローカル専用モードで動作します。", "info");
   }
 });
+
+// ---- クラウドへ保存（アップロード） ----
+syncUploadBtn.addEventListener("click", async () => {
+  if (!cryptoKey || !vaultSalt){ setSyncMsg("先にロックを解除してください。", "err"); return; }
+  if (!syncActive()){ setSyncMsg("クラウド同期が無効です（ローカル専用）。", "err"); return; }
+  syncUploadBtn.disabled = true;
+  try {
+    const blob = await encryptObj(cryptoKey, vaultSalt, stateToPayload());
+    if (getSyncMode() === "manual"){
+      const r = await fetch(SYNC_URL + "?mode=manual", {
+        method: "PUT", headers: authHeaders({ "content-type": "application/json" }), body: blob
+      });
+      if (!r.ok) throw new Error("upload failed");
+      setSyncMsg("スナップショットを保存しました。", "ok");
+      setSyncFlash("スナップショット保存", "ok");
+      await renderSnapshotList(); // 一覧を更新
+    } else {
+      const r = await fetch(SYNC_URL + "?mode=auto", {
+        method: "PUT", headers: authHeaders({ "content-type": "application/json" }), body: blob
+      });
+      if (!r.ok) throw new Error("upload failed");
+      localSet(blob);
+      setSyncMsg("クラウドへ保存しました（オート上書き）。", "ok");
+      setSyncFlash("オート保存しました", "ok");
+    }
+  } catch(e){
+    setSyncMsg("クラウド保存に失敗しました。", "err");
+  } finally {
+    syncUploadBtn.disabled = false;
+  }
+});
+
+// ---- クラウドから読み込み（ダウンロード） ----
+syncLoadBtn.addEventListener("click", async () => {
+  if (!cryptoKey){ setSyncMsg("先にロックを解除してください。", "err"); return; }
+  if (!syncActive()){ setSyncMsg("クラウド同期が無効です（ローカル専用）。", "err"); return; }
+  if (getSyncMode() === "manual"){
+    // スナップショット一覧の表示／非表示をトグル
+    if (snapshotListEl.innerHTML){ snapshotListEl.innerHTML = ""; return; }
+    await renderSnapshotList();
+  } else {
+    // オートスロットを読み込み
+    setSyncMsg("読み込み中…", "info");
+    try {
+      const r = await fetch(SYNC_URL + "?mode=auto", { headers: authHeaders() });
+      if (!r.ok) throw new Error();
+      const raw = await r.text();
+      if (!raw){ setSyncMsg("クラウドに保存データがありません。", "err"); return; }
+      if (!confirm("クラウドのオートセーブを読み込み、現在の内容を置き換えます。よろしいですか？")) { setSyncMsg(""); return; }
+      await loadBlobIntoState(raw);
+      setSyncMsg("クラウドから読み込みました。", "ok");
+      setSyncFlash("読み込みました", "ok");
+      syncOverlay.hidden = true;
+    } catch(e){ setSyncMsg("読み込みに失敗しました。", "err"); }
+  }
+});
+
+// マニュアルのスナップショット一覧を描画
+async function renderSnapshotList(){
+  snapshotListEl.innerHTML = '<div class="snap-empty">読み込み中…</div>';
+  let list;
+  try { list = await fetchSnapshotList(); }
+  catch(e){ snapshotListEl.innerHTML = '<div class="snap-empty">一覧の取得に失敗しました。</div>'; return; }
+  if (!list.length){ snapshotListEl.innerHTML = '<div class="snap-empty">スナップショットはまだありません。</div>'; return; }
+  snapshotListEl.innerHTML = "";
+  for (const s of list){
+    const row = document.createElement("div");
+    row.className = "snap-row";
+    const when = document.createElement("span");
+    when.className = "snap-when";
+    when.textContent = formatTs(s.ts);
+    const size = document.createElement("span");
+    size.className = "snap-size";
+    size.textContent = s.size ? Math.round(s.size / 1024) + " KB" : "";
+    const loadB = document.createElement("button");
+    loadB.className = "link-btn"; loadB.textContent = "読み込み";
+    loadB.addEventListener("click", () => loadSnapshotByKey(s.key));
+    const delB = document.createElement("button");
+    delB.className = "link-btn"; delB.textContent = "削除"; delB.style.color = "var(--danger)";
+    delB.addEventListener("click", () => deleteSnapshot(s.key));
+    row.append(when, size, loadB, delB);
+    snapshotListEl.appendChild(row);
+  }
+}
+function formatTs(ts){
+  if (!ts) return "(不明)";
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function loadSnapshotByKey(key){
+  if (!confirm("このスナップショットを読み込み、現在の内容を置き換えます。よろしいですか？")) return;
+  setSyncMsg("読み込み中…", "info");
+  try {
+    const r = await fetch(SYNC_URL + "?mode=manual&key=" + encodeURIComponent(key), { headers: authHeaders() });
+    if (!r.ok) throw new Error();
+    const raw = await r.text();
+    await loadBlobIntoState(raw);
+    setSyncMsg("スナップショットを読み込みました。", "ok");
+    setSyncFlash("読み込みました", "ok");
+    syncOverlay.hidden = true;
+  } catch(e){ setSyncMsg("読み込みに失敗しました。", "err"); }
+}
+async function deleteSnapshot(key){
+  if (!confirm("このスナップショットを削除します。よろしいですか？")) return;
+  try {
+    const r = await fetch(SYNC_URL + "?mode=manual&key=" + encodeURIComponent(key), { method: "DELETE", headers: authHeaders() });
+    if (!r.ok) throw new Error();
+    await renderSnapshotList();
+  } catch(e){ setSyncMsg("削除に失敗しました。", "err"); }
+}
+
+// 暗号文を復号して現在のキャンバスへ読み込む（取り消し可能なインポート扱い）。
+// salt がこの端末と異なる場合は sessionPass から鍵を導出して復号する。
+async function loadBlobIntoState(blobStr){
+  let data;
+  try {
+    data = await decryptBlob(cryptoKey, blobStr);
+  } catch(e){
+    if (!sessionPass) throw e;
+    const blob = JSON.parse(blobStr);
+    const key  = await deriveKey(sessionPass, _unb64(blob.salt));
+    data = await decryptBlob(key, blobStr);
+  }
+  if (!data || !Array.isArray(data.nodes)) throw new Error("invalid payload");
+  pushHistory();
+  loadSnapshot(JSON.stringify(data));
+  commit();
+  fitView();
+}
 
 // ============================================================
 //  起動
 // ============================================================
 async function init(){
+  await verifyToken();          // トークンをサーバーと照合し、ステータスを確定
+  updateSyncStatus();
   if (await storageGetRaw()){
     if (await tryAutoUnlock()) return;
     showLock("unlock");
